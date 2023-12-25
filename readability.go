@@ -9,6 +9,7 @@
 package readability
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,11 +45,34 @@ func FromURL(pageURL string, timeout time.Duration) (Article, error) {
 
 	// Fetch page from URL
 	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(pageURL)
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return Article{}, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// Set Accept-Encoding header to indicate support for gzip
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return Article{}, fmt.Errorf("failed to fetch the page: %v", err)
 	}
 	defer resp.Body.Close()
+
+	// Check if the content is encoded with gzip
+	var reader io.Reader
+	switch resp.Header.Get("Content-Encoding") {
+	case "gzip":
+		// If encoded with gzip, use a gzip reader
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return Article{}, fmt.Errorf("failed to create gzip reader: %v", err)
+		}
+		defer reader.(*gzip.Reader).Close()
+	default:
+		// If not encoded, use the response body as is
+		reader = resp.Body
+	}
 
 	// Make sure content type is HTML
 	cp := resp.Header.Get("Content-Type")
@@ -58,7 +82,7 @@ func FromURL(pageURL string, timeout time.Duration) (Article, error) {
 
 	// Parse content
 	parser := NewParser()
-	return parser.Parse(resp.Body, parsedURL)
+	return parser.Parse(reader, parsedURL)
 }
 
 // Check checks whether the input is readable without parsing the whole thing. It's the
